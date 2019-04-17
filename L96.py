@@ -37,7 +37,8 @@ class L96OneLevel(object):
         self.X += 1 / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
         self._history_X.append(self.X.copy())
 
-    def iterate(self, steps):
+    def iterate(self, time):
+        steps = int(time / self.dt)
         for n in tqdm(range(steps), disable=self.noprog):
             self.step()
 
@@ -50,16 +51,19 @@ class L96OneLevel(object):
 
     @property
     def history(self):
-        return xr.DataArray(self._history_X, dims=['time', 'x'], name='X')
+        return xr.DataArray(
+            self._history_X, dims=['time', 'x'], name='X',
+            coords={'time': np.arange(len(self._history_X)) * self.dt, 'x': np.arange(self.K)}
+        )
 
 
 class L96TwoLevelUncoupled(object):
-    def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.001,
-                 X_init=None, noprog=False):
+    def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.01,
+                 X_init=None, Y_init=None, noprog=False):
         self.K, self.J, self.h, self.F, self.c, self.b, self.dt = K, J, h, F, c, b, dt
         self.noprog=noprog
-        self.X = np.random.rand(self.K) if X_init is None else X_init
-        self.Y = np.zeros(self.K * self.J)
+        self.X = np.random.rand(self.K) if X_init is None else X_init.copy()
+        self.Y = np.zeros(self.K * self.J) if Y_init is None else Y_init.copy()
         self._history_X = [self.X.copy()]
         self._history_Y = [self.Y.copy()]
         self._history_B = [-self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)]
@@ -102,26 +106,33 @@ class L96TwoLevelUncoupled(object):
         self._history_Y.append(self.Y.copy())
         self._history_B.append(B.copy())
 
-    def iterate(self, steps):
+    def iterate(self, time):
+        steps = int(time / self.dt)
         for n in tqdm(range(steps), disable=self.noprog):
             self.step()
 
     @property
     def state(self):
-        return np.concatenate([self.X, self.Y])
+        return np.concatenate([self.X, self.Y * self.c])
 
     def set_state(self, x):
         self.X = x[:self.K]
-        self.Y = x[self.K:]
+        self.Y = x[self.K:] / self.c
 
     @property
     def history(self):
-        da_X = xr.DataArray(self._history_X, dims=['time', 'x'], name='X')
+        da_X = xr.DataArray(self._history_X, dims=['time', 'x'], name='X', )
         da_B = xr.DataArray(self._history_B, dims=['time', 'x'], name='B')
         da_X_repeat = xr.DataArray(np.repeat(self._history_X, self.J, 1),
                                    dims=['time', 'y'], name='X_repeat')
         da_Y = xr.DataArray(self._history_Y, dims=['time', 'y'], name='Y')
-        return xr.Dataset({'X': da_X, 'B': da_B, 'Y': da_Y, 'X_repeat': da_X_repeat})
+        return xr.Dataset(
+            {'X': da_X, 'B': da_B, 'Y': da_Y, 'X_repeat': da_X_repeat},
+            coords={'time': np.arange(len(self._history_X)) * self.dt, 'x': np.arange(self.K),
+                    'y': np.arange(self.K * self.J)}
+        )
+
+
 
 
 class L96TwoLevelCoupled(object):
