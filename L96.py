@@ -59,14 +59,20 @@ class L96OneLevel(object):
 
 class L96TwoLevelUncoupled(object):
     def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.01,
-                 X_init=None, Y_init=None, noprog=False):
+                 X_init=None, Y_init=None, noprog=False, noYhist=False, save_dt=0.1):
         self.K, self.J, self.h, self.F, self.c, self.b, self.dt = K, J, h, F, c, b, dt
-        self.noprog=noprog
+        self.noprog, self.noYhist = noprog, noYhist
+        self.step_count = 0
+        self.save_steps = int(save_dt / dt)
         self.X = np.random.rand(self.K) if X_init is None else X_init.copy()
         self.Y = np.zeros(self.K * self.J) if Y_init is None else Y_init.copy()
         self._history_X = [self.X.copy()]
-        self._history_Y = [self.Y.copy()]
+        self._history_Y_mean = [self.Y.reshape(self.K, self.J).mean(1).copy()]
+        self._history_Y2_mean = [(self.Y.reshape(self.K, self.J)**2).mean(1).copy()]
         self._history_B = [-self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)]
+        if not self.noYhist:
+            self._history_Y = [self.Y.copy()]
+
 
     def _rhs_X(self, X, B):
         """Compute the right hand side of the X-ODE."""
@@ -87,7 +93,7 @@ class L96TwoLevelUncoupled(object):
     def step(self):
         # First get solution for X without updating Y
         B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
-        Y_mean = self.Y.reshape(self.K, self.J).mean(1)
+
         k1_X = self.dt * self._rhs_X(self.X, B)
         k2_X = self.dt * self._rhs_X(self.X + k1_X / 2, B)
         k3_X = self.dt * self._rhs_X(self.X + k2_X / 2, B)
@@ -102,9 +108,20 @@ class L96TwoLevelUncoupled(object):
         # Then update both
         self.X += 1 / 6 * (k1_X + 2 * k2_X + 2 * k3_X + k4_X)
         self.Y += 1 / 6 * (k1_Y + 2 * k2_Y + 2 * k3_Y + k4_Y)
-        self._history_X.append(self.X.copy())
-        self._history_Y.append(self.Y.copy())
-        self._history_B.append(B.copy())
+
+        self.step_count += 1
+
+        if self.step_count % self.save_steps == 0:
+            Y_mean = self.Y.reshape(self.K, self.J).mean(1)
+            Y2_mean = (self.Y.reshape(self.K, self.J)**2).mean(1)
+
+            self._history_X.append(self.X.copy())
+            self._history_Y_mean.append(Y_mean.copy())
+            self._history_Y2_mean.append(Y2_mean.copy())
+            self._history_B.append(B.copy())
+            if not self.noYhist:
+                self._history_Y.append(self.Y.copy())
+
 
     def iterate(self, time):
         steps = int(time / self.dt)
@@ -121,13 +138,17 @@ class L96TwoLevelUncoupled(object):
 
     @property
     def history(self):
-        da_X = xr.DataArray(self._history_X, dims=['time', 'x'], name='X', )
-        da_B = xr.DataArray(self._history_B, dims=['time', 'x'], name='B')
-        da_X_repeat = xr.DataArray(np.repeat(self._history_X, self.J, 1),
+        dic = {}
+        dic['X'] = xr.DataArray(self._history_X, dims=['time', 'x'], name='X')
+        dic['B'] = xr.DataArray(self._history_B, dims=['time', 'x'], name='B')
+        dic['Y_mean'] = xr.DataArray(self._history_Y_mean, dims=['time', 'x'], name='Y_mean')
+        dic['Y2_mean'] = xr.DataArray(self._history_Y2_mean, dims=['time', 'x'], name='Y2_mean')
+        if not self.noYhist:
+            dic['X_repeat'] = xr.DataArray(np.repeat(self._history_X, self.J, 1),
                                    dims=['time', 'y'], name='X_repeat')
-        da_Y = xr.DataArray(self._history_Y, dims=['time', 'y'], name='Y')
+            dic['Y'] = xr.DataArray(self._history_Y, dims=['time', 'y'], name='Y')
         return xr.Dataset(
-            {'X': da_X, 'B': da_B, 'Y': da_Y, 'X_repeat': da_X_repeat},
+            dic,
             coords={'time': np.arange(len(self._history_X)) * self.dt, 'x': np.arange(self.K),
                     'y': np.arange(self.K * self.J)}
         )
