@@ -11,7 +11,7 @@ from tqdm import tqdm_notebook as tqdm
 
 
 class L96OneLevel(object):
-    def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.01,
+    def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.001,
                  X_init=None, noprog=False):
         self.K, self.J, self.h, self.F, self.c, self.b, self.dt = K, J, h, F, c, b, dt
         self.params = [self.F]
@@ -51,17 +51,20 @@ class L96OneLevel(object):
 
     @property
     def history(self):
-        return xr.DataArray(
-            self._history_X, dims=['time', 'x'], name='X',
+        da = xr.DataArray(self._history_X, dims=['time', 'x'], name='X')
+        return xr.Dataset(
+            {'X': da},
             coords={'time': np.arange(len(self._history_X)) * self.dt, 'x': np.arange(self.K)}
         )
 
 
-class L96TwoLevelUncoupled(object):
-    def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.01,
-                 X_init=None, Y_init=None, noprog=False, noYhist=False, save_dt=0.1):
+class L96TwoLevel(object):
+    def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.001,
+                 X_init=None, Y_init=None, noprog=False, noYhist=False, save_dt=0.1,
+                 coupled=False):
+        # Model parameters
         self.K, self.J, self.h, self.F, self.c, self.b, self.dt = K, J, h, F, c, b, dt
-        self.noprog, self.noYhist = noprog, noYhist
+        self.noprog, self.noYhist, self.coupled = noprog, noYhist, coupled
         self.step_count = 0
         self.save_steps = int(save_dt / dt)
         self.X = np.random.rand(self.K) if X_init is None else X_init.copy()
@@ -73,48 +76,60 @@ class L96TwoLevelUncoupled(object):
         if not self.noYhist:
             self._history_Y = [self.Y.copy()]
 
-
-    def _rhs_X(self, X, B):
+    def _rhs_X_dt(self, X, Y=None, B=None):
         """Compute the right hand side of the X-ODE."""
-        dXdt = (
-                -np.roll(X, -1) * (np.roll(X, -2) - np.roll(X, 1)) -
-                X + self.F + B
-        )
-        return dXdt
+        if Y is None:
+            dXdt = (
+                    -np.roll(X, -1) * (np.roll(X, -2) - np.roll(X, 1)) -
+                    X + self.F + B
+            )
+        else:
+            dXdt = (
+                    -np.roll(X, -1) * (np.roll(X, -2) - np.roll(X, 1)) -
+                    X + self.F - self.h * self.c * Y.reshape(self.K, self.J).mean(1)
+            )
+        return self.dt * dXdt
 
-    def _rhs_Y(self, X, Y):
+    def _rhs_Y_dt(self, X, Y):
         """Compute the right hand side of the Y-ODE."""
         dYdt = (
                        -self.b * np.roll(Y, -1) * (np.roll(Y, -2) - np.roll(Y, 1)) -
                        Y + self.h / self.J * np.repeat(X, self.J)
                ) * self.c
-        return dYdt
+        return self.dt * dYdt
+
+    def _rhs_dt(self, X, Y):
+        return self._rhs_X_dt(X, Y=Y), self._rhs_Y_dt(X, Y)
 
     def step(self):
         # First get solution for X without updating Y
         B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
 
-        k1_X = self.dt * self._rhs_X(self.X, B)
-        k2_X = self.dt * self._rhs_X(self.X + k1_X / 2, B)
-        k3_X = self.dt * self._rhs_X(self.X + k2_X / 2, B)
-        k4_X = self.dt * self._rhs_X(self.X + k3_X, B)
+        if self.coupled:
+            k1_X, k1_Y = self._rhs_dt(self.X, self.Y)
+            k2_X, k2_Y = self._rhs_dt(self.X + k1_X / 2, self.Y + k1_Y / 2)
+            k3_X, k3_Y = self._rhs_dt(self.X + k2_X / 2, self.Y + k2_Y / 2)
+            k4_X, k4_Y = self._rhs_dt(self.X + k3_X, self.Y + k3_Y)
+        else:
+            B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
+            k1_X = self._rhs_X_dt(self.X, B=B)
+            k2_X = self._rhs_X_dt(self.X + k1_X / 2, B=B)
+            k3_X = self._rhs_X_dt(self.X + k2_X / 2, B=B)
+            k4_X = self._rhs_X_dt(self.X + k3_X, B=B)
+            # Then update Y with unupdated X
+            k1_Y = self._rhs_Y_dt(self.X, self.Y)
+            k2_Y = self._rhs_Y_dt(self.X, self.Y + k1_Y / 2)
+            k3_Y = self._rhs_Y_dt(self.X, self.Y + k2_Y / 2)
+            k4_Y = self._rhs_Y_dt(self.X, self.Y + k3_Y)
 
-        # Then update Y with unupdated X
-        k1_Y = self.dt * self._rhs_Y(self.X, self.Y)
-        k2_Y = self.dt * self._rhs_Y(self.X, self.Y + k1_Y / 2)
-        k3_Y = self.dt * self._rhs_Y(self.X, self.Y + k2_Y / 2)
-        k4_Y = self.dt * self._rhs_Y(self.X, self.Y + k3_Y)
-
-        # Then update both
         self.X += 1 / 6 * (k1_X + 2 * k2_X + 2 * k3_X + k4_X)
         self.Y += 1 / 6 * (k1_Y + 2 * k2_Y + 2 * k3_Y + k4_Y)
 
         self.step_count += 1
-
         if self.step_count % self.save_steps == 0:
             Y_mean = self.Y.reshape(self.K, self.J).mean(1)
             Y2_mean = (self.Y.reshape(self.K, self.J)**2).mean(1)
-
+            B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
             self._history_X.append(self.X.copy())
             self._history_Y_mean.append(Y_mean.copy())
             self._history_Y2_mean.append(Y2_mean.copy())
@@ -130,11 +145,11 @@ class L96TwoLevelUncoupled(object):
 
     @property
     def state(self):
-        return np.concatenate([self.X, self.Y * self.c])
+        return np.concatenate([self.X, self.Y])
 
     def set_state(self, x):
         self.X = x[:self.K]
-        self.Y = x[self.K:] / self.c
+        self.Y = x[self.K:]
 
     @property
     def history(self):
@@ -152,62 +167,6 @@ class L96TwoLevelUncoupled(object):
             coords={'time': np.arange(len(self._history_X)) * self.dt, 'x': np.arange(self.K),
                     'y': np.arange(self.K * self.J)}
         )
-
-
-
-
-class L96TwoLevelCoupled(object):
-    def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.001,
-                 X_init=None):
-        self.K, self.J, self.h, self.F, self.c, self.b, self.dt = K, J, h, F, c, b, dt
-        self.X = np.random.rand(self.K) if X_init is None else X_init
-        self.Y = np.zeros(self.K * self.J)
-        self._history_X = self.X[None, :]
-        self._history_Y = self.Y[None, :]
-
-    def _rhs_X(self, X, Y):
-        """Compute the right hand side of the X-ODE."""
-        dXdt = (
-                -np.roll(X, -1) * (np.roll(X, -2) - np.roll(X, 1)) -
-                X + self.F - self.h * self.c * Y.reshape(self.K, self.J).mean(1)
-        )
-        return dXdt
-
-    def _rhs_Y(self, X, Y):
-        """Compute the right hand side of the Y-ODE."""
-        dYdt = (
-                       -self.b * np.roll(Y, -1) * (np.roll(Y, -2) - np.roll(Y, 1)) -
-                       Y + self.h / self.J * np.repeat(X, self.J)
-               ) / self.c
-        return dYdt
-
-    def _rhs_dt(self, X, Y):
-        return self.dt * self._rhs_X(X, Y), self.dt * self._rhs_Y(X, Y)
-
-    def step(self):
-        k1_X, k1_Y = self._rhs_dt(self.X, self.Y)
-        k2_X, k2_Y = self._rhs_dt(self.X + k1_X / 2, self.Y + k1_Y / 2)
-        k3_X, k3_Y = self._rhs_dt(self.X + k2_X / 2, self.Y + k2_Y / 2)
-        k4_X, k4_Y = self._rhs_dt(self.X + k3_X, self.Y + k3_Y)
-        self.X += 1 / 6 * (k1_X + 2 * k2_X + 2 * k3_X + k4_X)
-        self.Y += 1 / 6 * (k1_Y + 2 * k2_Y + 2 * k3_Y + k4_Y)
-        self._history_X = np.concatenate([self._history_X, self.X[None, :]])
-        self._history_Y = np.concatenate([self._history_Y, self.Y[None, :]])
-
-    def iterate(self, steps):
-        for n in tqdm(range(steps)):
-            self.step()
-
-    @property
-    def history(self):
-        da_X = xr.DataArray(self._history_X, dims=['time', 'x'], name='X')
-        da_X_repeat = xr.DataArray(np.repeat(self._history_X, self.J, 1),
-                                   dims=['time', 'y'], name='X_repeat')
-        da_Y = xr.DataArray(self._history_Y, dims=['time', 'y'], name='Y')
-        return xr.Dataset({'X': da_X, 'Y': da_Y, 'X_repeat': da_X_repeat})
-
-
-
 
 
 class L96TwoLevelNN(object):
