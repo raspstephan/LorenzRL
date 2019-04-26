@@ -11,6 +11,7 @@ from tqdm import tqdm_notebook as tqdm
 import multiprocessing as mp
 from numpy.linalg import inv
 import matplotlib.pyplot as plt
+import pdb
 
 
 def multi_helper(l, nt):
@@ -21,7 +22,7 @@ def multi_helper(l, nt):
 class EnKF():
     def __init__(self, l96, nens, obs_noise, cyc_len, H=lambda l: l.state,
                  get_state=lambda l: l.state, set_state=lambda l, x: l.set_state(x),
-                 mp=None, par_noise=0, y=None):
+                 mp=None, par_noise=0, y=None, climate=False):
         """
         Ensemble Kalman Filter
         l96 is a L96 model object which will be copied for each of the nens ensemble members.
@@ -35,9 +36,13 @@ class EnKF():
         self.l96, self.nens, self.obs_noise, self.cyc_len, self.mp, self.H, self.get_state, self.set_state, self.par_noise, self.y = \
             l96, nens, obs_noise, cyc_len, mp, H, get_state, set_state, par_noise, y
         self.R = np.diag(np.ones(H(l96).shape) * obs_noise)   # Observation error matrix
-        self.history = []
+        self.parameter_history_det = []
+        self.parameter_history_ens = []
+        self.climate=climate
+        if self.climate: self.climate_error = []
 
     def initialize(self, ic, ic_noise):
+        self.ic, self.ic_noise = ic, ic_noise
         self.l96_det = deepcopy(self.l96)
         self.l96_det.set_state(ic.copy() + np.random.normal(0, ic_noise, ic.shape))
         self.l96_ens = [deepcopy(self.l96) for n in range(self.nens)]
@@ -47,8 +52,19 @@ class EnKF():
             self.l96_tru = deepcopy(self.l96)
             self.l96_tru.set_state(ic.copy())
 
+    def initialize_parameters(self, fn, priors, sigmas):
+        # Deterministic run without noise
+        fn(self.l96_det, priors, np.zeros(len(np.atleast_1d(sigmas))))
+        self.parameter_history_det.append(self.l96_det.parameters)
+        ens_hist = []
+        for l in self.l96_ens:
+            fn(l, priors, sigmas)
+            ens_hist.append(l.parameters)
+        self.parameter_history_ens.append(np.array(ens_hist))
+
     def step(self):
         # 1. Forecast
+        #
         if self.mp is None:
             self.l96_det.iterate(self.cyc_len)
             for l in self.l96_ens:
@@ -80,6 +96,18 @@ class EnKF():
         for i, l in enumerate(self.l96_ens):
             self.set_state(l, x_a_ens[i])
 
+        # Write analysis in history
+        self.parameter_history_det.append(self.l96_det.parameters)
+        self.parameter_history_ens.append(np.array([l.parameters for l in self.l96_ens]))
+
+        if self.climate:
+            self.l96_det.erase_history()
+            self.l96_det.set_state(self.ic.copy() + np.random.normal(0, self.ic_noise, self.ic.shape))
+            for i, l in enumerate(self.l96_ens):
+                l.erase_history()
+                l.set_state(self.ic.copy() + np.random.normal(0, self.ic_noise, self.ic.shape))
+            self.climate_error.append(np.sqrt((((y - hx_f_ens)/np.sqrt(self.obs_noise))**2)).mean())
+
     def kalman_gain(self, x_f_ens, hx_f_ens):
         X = (x_f_ens - x_f_ens.mean(0)).T
         Y = (hx_f_ens - hx_f_ens.mean(0)).T
@@ -105,15 +133,28 @@ class EnKF():
             self.l96_det, self.l96_ens = all_ls[0], all_ls[1:]
 
 
-def plot_mse(enkf):
+def plot_mse(enkf, var='X'):
     for l in enkf.l96_ens:
         mse = (enkf.l96_tru.history - l.history)**2
         mse = mse.mean('x')
-        mse.X.plot(c='gray')
+        mse[var].plot(c='gray')
     mse = (enkf.l96_tru.history - enkf.l96_det.history)**2
     mse = mse.mean('x')
-    mse.X.plot(c='r')
-    plt.ylabel('MSE(X)')
+    mse[var].plot(c='r')
+    plt.ylabel(f'MSE({var})')
+
+def plot_params(enkf, names=['F', 'h', 'c', 'b']):
+    det = np.array(enkf.parameter_history_det)
+    ens = np.array(enkf.parameter_history_ens)
+    fig, axs = plt.subplots(1, 4, figsize=(15, 5))
+    def panel(ax, det, ens, title):
+        for i in range(enkf.nens):
+            ax.plot(ens[:, i], c='gray')
+        ax.plot(det, c='r')
+        ax.set_title('%s mean = %1.2f / std = %1.2f' % (title, ens[-1].mean(), ens[-1].std()))
+    for i, n in enumerate(names):
+        panel(axs[i], det[..., i], ens[..., i], n)
+    plt.tight_layout()
 
 
 class EnKFParamClimate2():

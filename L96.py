@@ -50,6 +50,13 @@ class L96OneLevel(object):
         self.X = x
 
     @property
+    def parameters(self):
+        return self.F
+
+    def erase_history(self):
+        self._history_X = []
+
+    @property
     def history(self):
         da = xr.DataArray(self._history_X, dims=['time', 'x'], name='X')
         return xr.Dataset(
@@ -57,15 +64,23 @@ class L96OneLevel(object):
             coords={'time': np.arange(len(self._history_X)) * self.dt, 'x': np.arange(self.K)}
         )
 
+    def mean_stats(self, ax=None, fn=np.mean):
+        h = self.history
+        return np.concatenate([
+            np.atleast_1d(fn(h.X, ax)),
+            np.atleast_1d(fn((h.X**2), ax)),
+        ])
+
 
 class L96TwoLevel(object):
     def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.001,
                  X_init=None, Y_init=None, noprog=False, noYhist=False, save_dt=0.1,
-                 coupled=False):
+                 integration_type='uncoupled'):
         # Model parameters
         self.K, self.J, self.h, self.F, self.c, self.b, self.dt = K, J, h, F, c, b, dt
-        self.noprog, self.noYhist, self.coupled = noprog, noYhist, coupled
+        self.noprog, self.noYhist, self.integration_type = noprog, noYhist, integration_type
         self.step_count = 0
+        self.save_dt = save_dt
         self.save_steps = int(save_dt / dt)
         self.X = np.random.rand(self.K) if X_init is None else X_init.copy()
         self.Y = np.zeros(self.K * self.J) if Y_init is None else Y_init.copy()
@@ -102,16 +117,16 @@ class L96TwoLevel(object):
         return self._rhs_X_dt(X, Y=Y), self._rhs_Y_dt(X, Y)
 
     def step(self):
-        # First get solution for X without updating Y
+        """Integrate one time step"""
         B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
-
-        if self.coupled:
+        if self.integration_type == 'coupled':
             k1_X, k1_Y = self._rhs_dt(self.X, self.Y)
             k2_X, k2_Y = self._rhs_dt(self.X + k1_X / 2, self.Y + k1_Y / 2)
             k3_X, k3_Y = self._rhs_dt(self.X + k2_X / 2, self.Y + k2_Y / 2)
             k4_X, k4_Y = self._rhs_dt(self.X + k3_X, self.Y + k3_Y)
-        else:
-            B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
+        elif self.integration_type in ['uncoupled', 'parameterization']:
+            if self.integration_type == 'parameterization':
+                self.X += B * self.dt; B = 0
             k1_X = self._rhs_X_dt(self.X, B=B)
             k2_X = self._rhs_X_dt(self.X + k1_X / 2, B=B)
             k3_X = self._rhs_X_dt(self.X + k2_X / 2, B=B)
@@ -137,7 +152,6 @@ class L96TwoLevel(object):
             if not self.noYhist:
                 self._history_Y.append(self.Y.copy())
 
-
     def iterate(self, time):
         steps = int(time / self.dt)
         for n in tqdm(range(steps), disable=self.noprog):
@@ -152,6 +166,18 @@ class L96TwoLevel(object):
         self.Y = x[self.K:]
 
     @property
+    def parameters(self):
+        return np.array([self.F, self.h, self.c, self.b])
+
+    def erase_history(self):
+        self._history_X = []
+        self._history_Y_mean = []
+        self._history_Y2_mean = []
+        self._history_B = []
+        if not self.noYhist:
+            self._history_Y = []
+
+    @property
     def history(self):
         dic = {}
         dic['X'] = xr.DataArray(self._history_X, dims=['time', 'x'], name='X')
@@ -164,9 +190,19 @@ class L96TwoLevel(object):
             dic['Y'] = xr.DataArray(self._history_Y, dims=['time', 'y'], name='Y')
         return xr.Dataset(
             dic,
-            coords={'time': np.arange(len(self._history_X)) * self.dt, 'x': np.arange(self.K),
+            coords={'time': np.arange(len(self._history_X)) * self.save_dt, 'x': np.arange(self.K),
                     'y': np.arange(self.K * self.J)}
         )
+
+    def mean_stats(self, ax=None, fn=np.mean):
+        h = self.history
+        return np.concatenate([
+            np.atleast_1d(fn(h.X, ax)),
+            np.atleast_1d(fn(h.Y_mean, ax)),
+            np.atleast_1d(fn((h.X ** 2), ax)),
+            np.atleast_1d(fn((h.X * h.Y_mean), ax)),
+            np.atleast_1d(fn(h.Y2_mean, ax))
+        ])
 
 
 class L96TwoLevelNN(object):
