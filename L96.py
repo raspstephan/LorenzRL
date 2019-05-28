@@ -4,10 +4,19 @@ Definition of the Lorenz96 model.
 Created on 2019-04-16-12-28
 Author: Stephan Rasp, raspstephan@gmail.com
 """
+import sys
+def in_notebook():
+    """
+    Returns ``True`` if the module is running in IPython kernel,
+    ``False`` if in IPython shell or other Python shell.
+    """
+    return 'ipykernel' in sys.modules
 import numpy as np
-import matplotlib.pyplot as plt
 import xarray as xr
-from tqdm import tqdm_notebook as tqdm
+if in_notebook():
+    from tqdm import tqdm_notebook as tqdm
+else:
+    from tqdm import tqdm
 
 
 class L96OneLevel(object):
@@ -75,12 +84,14 @@ class L96OneLevel(object):
 class L96TwoLevel(object):
     def __init__(self, K=36, J=10, h=1, F=10, c=10, b=10, dt=0.001,
                  X_init=None, Y_init=None, noprog=False, noYhist=False, save_dt=0.1,
-                 integration_type='uncoupled'):
+                 integration_type='uncoupled', parameterization=None):
         # Model parameters
         self.K, self.J, self.h, self.F, self.c, self.b, self.dt = K, J, h, F, c, b, dt
         self.noprog, self.noYhist, self.integration_type = noprog, noYhist, integration_type
         self.step_count = 0
         self.save_dt = save_dt
+        self.parameterization = parameterization
+        if self.parameterization is not None: self.integration_type = 'parameterization'
         self.save_steps = int(save_dt / dt)
         self.X = np.random.rand(self.K) if X_init is None else X_init.copy()
         self.Y = np.zeros(self.K * self.J) if Y_init is None else Y_init.copy()
@@ -118,7 +129,10 @@ class L96TwoLevel(object):
 
     def step(self):
         """Integrate one time step"""
-        B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
+        if self.parameterization is None:
+            B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
+        else:
+            B = self.parameterization(self.X)
         if self.integration_type == 'coupled':
             k1_X, k1_Y = self._rhs_dt(self.X, self.Y)
             k2_X, k2_Y = self._rhs_dt(self.X + k1_X / 2, self.Y + k1_Y / 2)

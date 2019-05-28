@@ -146,7 +146,7 @@ def plot_mse(enkf, var='X'):
 def plot_params(enkf, names=['F', 'h', 'c', 'b']):
     det = np.array(enkf.parameter_history_det)
     ens = np.array(enkf.parameter_history_ens)
-    fig, axs = plt.subplots(1, 4, figsize=(15, 5))
+    fig, axs = plt.subplots(1, len(names), figsize=(15, 5))
     def panel(ax, det, ens, title):
         for i in range(enkf.nens):
             ax.plot(ens[:, i], c='gray')
