@@ -24,24 +24,41 @@ class EnKF():
                  get_state=lambda l: l.state, set_state=lambda l, x: l.set_state(x),
                  mp=None, par_noise=0, y=None, climate=False):
         """
-        Ensemble Kalman Filter
-        l96 is a L96 model object which will be copied for each of the nens ensemble members.
-        obs_noise is a vector with the observation variance.
-        cyc_len is the integration time for each cycle.
-        H is the observation operator function that must take a l96 onject and return the observables.
-        get_state is a function that takes a l96 object and returns the state vector x
-        set_state is exactly the opposite. It takes the l96 object and a state vector, and ses the analysis state
-        if y is given, no truth run will be run.
+        Ensemble Kalman Filter class.
+        Runs an ensemble, a deterministic run and (if not in climate mode) a truth run. Performs DA updates each cycle.
+        Can run in NWP setup and climate setup. Climate setup basically means that we are fitting to long term statistics and only learning parameters, not the state.
+        # Arguments
+            l96: L96 model that will be copied for each of the ensemble members
+            nens: Number of ensemble members
+            obs_noise: Vector (shape m) with observation variance
+            cyc_len: Integration time (in days) for each DA cycle
+            H: oObservation operator n --> m, function that takes a L96 object and returns the observations
+            get_state: Function that takes the L96 object and returns the state vector x
+            set_state: Reverse function. Takes the L96 object and the analysis state and accordingly modifies the L96 object.
+            mp: Parallel processes for ensemble integration. Not parallel if None.
+            par_noise: Currently not implemented
+            y: Fixed observations (shape m), to be used in climate setup. If given, no truth run is run.
+            climate: Boolian flag whether climate mode is on. Basically means that after each cycle the initial conditions are set back to the original.
         """
-        self.l96, self.nens, self.obs_noise, self.cyc_len, self.mp, self.H, self.get_state, self.set_state, self.par_noise, self.y = \
-            l96, nens, obs_noise, cyc_len, mp, H, get_state, set_state, par_noise, y
-        self.R = np.diag(np.ones(H(l96).shape) * obs_noise)   # Observation error matrix
-        self.parameter_history_det = []
-        self.parameter_history_ens = []
-        self.climate=climate
+        # Copy arguments
+        self.l96, self.nens, self.obs_noise, self.cyc_len, self.mp, self.H, self.get_state, self.set_state, self.par_noise, self.y, self.climate = \
+            l96, nens, obs_noise, cyc_len, mp, H, get_state, set_state, par_noise, y, climate
+        # Create diagonal observation error matrix
+        self.R = np.diag(np.ones(H(l96).shape) * obs_noise)
+        # Allocate history lists for parameter estimation
+        self.parameter_history_det = []; self.parameter_history_ens = []
         if self.climate: self.climate_error = []
+        # Get dimensions
+        self.n = self.get_state(self.l96).shape[0]
+        self.m = H(l96).shape[0]
+        print(f'Dimensions: n = {self.n}, m = {self.m}')
 
     def initialize(self, ic, ic_noise):
+        """Initialize models with initial conditions. Deterministic and ensemble ICs are perturbed with ic_noise
+        # Arguments
+            ic: Initial conditions (shape n)
+            ic_noise: Noise to perturb IC (shape n or 1)
+        """
         self.ic, self.ic_noise = ic, ic_noise
         self.l96_det = deepcopy(self.l96)
         self.l96_det.set_state(ic.copy() + np.random.normal(0, ic_noise, ic.shape))
@@ -53,6 +70,15 @@ class EnKF():
             self.l96_tru.set_state(ic.copy())
 
     def initialize_parameters(self, fn, priors, sigmas):
+        """For parameter estimation we also need to perturb the parameters of the ensemble in the beginning. The deterministic parameter will not be perturbed from its prior.
+        # Arguments
+            fn: Function that takes the L96 object, a vector (shape N_param) of priors and sigmas and randomly perturbs the parameter.
+            priors:
+
+        :param priors:
+        :param sigmas:
+        :return:
+        """
         # Deterministic run without noise
         fn(self.l96_det, priors, np.zeros(len(np.atleast_1d(sigmas))))
         self.parameter_history_det.append(self.l96_det.parameters)
