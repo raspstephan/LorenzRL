@@ -140,11 +140,11 @@ class L96TwoLevel(object):
             k4_X, k4_Y = self._rhs_dt(self.X + k3_X, self.Y + k3_Y)
         elif self.integration_type in ['uncoupled', 'parameterization']:
             if self.integration_type == 'parameterization':
-                self.X += B * self.dt; B = 0
-            k1_X = self._rhs_X_dt(self.X, B=B)
-            k2_X = self._rhs_X_dt(self.X + k1_X / 2, B=B)
-            k3_X = self._rhs_X_dt(self.X + k2_X / 2, B=B)
-            k4_X = self._rhs_X_dt(self.X + k3_X, B=B)
+                self.X += B * self.dt
+            k1_X = self._rhs_X_dt(self.X, B=B if self.integration_type == 'uncoupled' else 0)
+            k2_X = self._rhs_X_dt(self.X + k1_X / 2, B=B if self.integration_type == 'uncoupled' else 0)
+            k3_X = self._rhs_X_dt(self.X + k2_X / 2, B=B if self.integration_type == 'uncoupled' else 0)
+            k4_X = self._rhs_X_dt(self.X + k3_X, B=B if self.integration_type == 'uncoupled' else 0)
             # Then update Y with unupdated X
             k1_Y = self._rhs_Y_dt(self.X, self.Y)
             k2_Y = self._rhs_Y_dt(self.X, self.Y + k1_Y / 2)
@@ -158,7 +158,6 @@ class L96TwoLevel(object):
         if self.step_count % self.save_steps == 0:
             Y_mean = self.Y.reshape(self.K, self.J).mean(1)
             Y2_mean = (self.Y.reshape(self.K, self.J)**2).mean(1)
-            B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
             self._history_X.append(self.X.copy())
             self._history_Y_mean.append(Y_mean.copy())
             self._history_Y2_mean.append(Y2_mean.copy())
