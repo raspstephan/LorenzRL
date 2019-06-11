@@ -60,7 +60,7 @@ class L96OneLevel(object):
 
     @property
     def parameters(self):
-        return self.F
+        return np.atleast_1d(self.F)
 
     def erase_history(self):
         self._history_X = []
@@ -217,6 +217,15 @@ class L96TwoLevel(object):
             np.atleast_1d(fn((h.X * h.Y_mean), ax)),
             np.atleast_1d(fn(h.Y2_mean, ax))
         ])
+
+
+class L96TwoLevelParam(L96TwoLevel):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    @property
+    def parameters(self):
+        return self.parameterization.p
 
 
 class L96TwoLevelNN(object):

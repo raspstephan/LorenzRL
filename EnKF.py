@@ -4,10 +4,20 @@ Ensemble Kalman Filter class
 Created on 2019-04-16-12-31
 Author: Stephan Rasp, raspstephan@gmail.com
 """
+import sys
+def in_notebook():
+    """
+    Returns ``True`` if the module is running in IPython kernel,
+    ``False`` if in IPython shell or other Python shell.
+    """
+    return 'ipykernel' in sys.modules
 import numpy as np
 from copy import deepcopy
 import xarray as xr
-from tqdm import tqdm_notebook as tqdm
+if in_notebook():
+    from tqdm import tqdm_notebook as tqdm
+else:
+    from tqdm import tqdm
 import multiprocessing as mp
 from numpy.linalg import inv
 import matplotlib.pyplot as plt
@@ -48,6 +58,7 @@ class EnKF():
         # Allocate history lists for parameter estimation
         self.parameter_history_det = []; self.parameter_history_ens = []
         if self.climate: self.climate_error = []
+        else: self.mse_det, self.mse_ens = [], []
         # Get dimensions
         self.n = self.get_state(self.l96).shape[0]
         self.m = H(l96).shape[0]
@@ -70,14 +81,12 @@ class EnKF():
             self.l96_tru.set_state(ic.copy())
 
     def initialize_parameters(self, fn, priors, sigmas):
-        """For parameter estimation we also need to perturb the parameters of the ensemble in the beginning. The deterministic parameter will not be perturbed from its prior.
+        """For parameter estimation we also need to perturb the parameters of the ensemble in the beginning.
+        The deterministic parameter will not be perturbed from its prior.
         # Arguments
             fn: Function that takes the L96 object, a vector (shape N_param) of priors and sigmas and randomly perturbs the parameter.
-            priors:
-
-        :param priors:
-        :param sigmas:
-        :return:
+            priors: mean of distribution for each parameter
+            sigmas: variances of distribution for each parameter
         """
         # Deterministic run without noise
         fn(self.l96_det, priors, np.zeros(len(np.atleast_1d(sigmas))))
@@ -133,6 +142,9 @@ class EnKF():
                 l.erase_history()
                 l.set_state(self.ic.copy() + np.random.normal(0, self.ic_noise, self.ic.shape))
             self.climate_error.append(np.sqrt((((y - hx_f_ens)/np.sqrt(self.obs_noise))**2)).mean())
+        else:
+            self.mse_det.append(((self.l96_tru.X - self.l96_det.X)**2).mean())
+            self.mse_ens.append([((self.l96_tru.X - l.X)**2).mean() for l in self.l96_ens])
 
     def kalman_gain(self, x_f_ens, hx_f_ens):
         X = (x_f_ens - x_f_ens.mean(0)).T
@@ -169,17 +181,19 @@ def plot_mse(enkf, var='X'):
     mse[var].plot(c='r')
     plt.ylabel(f'MSE({var})')
 
-def plot_params(enkf, names=['F', 'h', 'c', 'b']):
-    det = np.array(enkf.parameter_history_det)
-    ens = np.array(enkf.parameter_history_ens)
+def plot_params(enkf=None, names=['F', 'h', 'c', 'b'], truths=[10,1,10,10], show_title=True,
+                det=None, ens=None):
+    det = np.array(enkf.parameter_history_det if enkf is not None else det)
+    ens = np.array(enkf.parameter_history_ens if enkf is not None else ens)
     fig, axs = plt.subplots(1, len(names), figsize=(15, 5))
-    def panel(ax, det, ens, title):
-        for i in range(enkf.nens):
+    def panel(ax, det, ens, title, truth):
+        for i in range(ens.shape[1]):
             ax.plot(ens[:, i], c='gray')
         ax.plot(det, c='r')
-        ax.set_title('%s mean = %1.2f / std = %1.2f' % (title, ens[-1].mean(), ens[-1].std()))
+        if show_title: ax.set_title('%s mean = %1.2f / std = %1.2f' % (title, ens[-1].mean(), ens[-1].std()))
+        ax.axhline(truth)
     for i, n in enumerate(names):
-        panel(axs[i], det[..., i], ens[..., i], n)
+        panel(axs[i], det[..., i], ens[..., i], n, truths[i])
     plt.tight_layout()
 
 
