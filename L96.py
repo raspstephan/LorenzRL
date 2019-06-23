@@ -127,32 +127,37 @@ class L96TwoLevel(object):
     def _rhs_dt(self, X, Y):
         return self._rhs_X_dt(X, Y=Y), self._rhs_Y_dt(X, Y)
 
-    def step(self):
+    def step(self, add_B=True, B=None):
         """Integrate one time step"""
         if self.parameterization is None:
-            B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1)
-        else:
-            B = self.parameterization(self.X)
-        if self.integration_type == 'coupled':
-            k1_X, k1_Y = self._rhs_dt(self.X, self.Y)
-            k2_X, k2_Y = self._rhs_dt(self.X + k1_X / 2, self.Y + k1_Y / 2)
-            k3_X, k3_Y = self._rhs_dt(self.X + k2_X / 2, self.Y + k2_Y / 2)
-            k4_X, k4_Y = self._rhs_dt(self.X + k3_X, self.Y + k3_Y)
-        elif self.integration_type in ['uncoupled', 'parameterization']:
-            if self.integration_type == 'parameterization':
-                self.X += B * self.dt
-            k1_X = self._rhs_X_dt(self.X, B=B if self.integration_type == 'uncoupled' else 0)
-            k2_X = self._rhs_X_dt(self.X + k1_X / 2, B=B if self.integration_type == 'uncoupled' else 0)
-            k3_X = self._rhs_X_dt(self.X + k2_X / 2, B=B if self.integration_type == 'uncoupled' else 0)
-            k4_X = self._rhs_X_dt(self.X + k3_X, B=B if self.integration_type == 'uncoupled' else 0)
-            # Then update Y with unupdated X
-            k1_Y = self._rhs_Y_dt(self.X, self.Y)
-            k2_Y = self._rhs_Y_dt(self.X, self.Y + k1_Y / 2)
-            k3_Y = self._rhs_Y_dt(self.X, self.Y + k2_Y / 2)
-            k4_Y = self._rhs_Y_dt(self.X, self.Y + k3_Y)
+            B = -self.h * self.c * self.Y.reshape(self.K, self.J).mean(1) if B is None else B
+            if self.integration_type == 'coupled':
+                k1_X, k1_Y = self._rhs_dt(self.X, self.Y)
+                k2_X, k2_Y = self._rhs_dt(self.X + k1_X / 2, self.Y + k1_Y / 2)
+                k3_X, k3_Y = self._rhs_dt(self.X + k2_X / 2, self.Y + k2_Y / 2)
+                k4_X, k4_Y = self._rhs_dt(self.X + k3_X, self.Y + k3_Y)
+            elif self.integration_type == 'uncoupled':
+                k1_X = self._rhs_X_dt(self.X, B=B)
+                k2_X = self._rhs_X_dt(self.X + k1_X / 2, B=B)
+                k3_X = self._rhs_X_dt(self.X + k2_X / 2, B=B)
+                k4_X = self._rhs_X_dt(self.X + k3_X, B=B)
+                # Then update Y with unupdated X
+                k1_Y = self._rhs_Y_dt(self.X, self.Y)
+                k2_Y = self._rhs_Y_dt(self.X, self.Y + k1_Y / 2)
+                k3_Y = self._rhs_Y_dt(self.X, self.Y + k2_Y / 2)
+                k4_Y = self._rhs_Y_dt(self.X, self.Y + k3_Y)
 
-        self.X += 1 / 6 * (k1_X + 2 * k2_X + 2 * k3_X + k4_X)
-        self.Y += 1 / 6 * (k1_Y + 2 * k2_Y + 2 * k3_Y + k4_Y)
+            self.X += 1 / 6 * (k1_X + 2 * k2_X + 2 * k3_X + k4_X)
+            self.Y += 1 / 6 * (k1_Y + 2 * k2_Y + 2 * k3_Y + k4_Y)
+        else:  # Parameterization case
+            k1_X = self._rhs_X_dt(self.X, B=0)
+            k2_X = self._rhs_X_dt(self.X + k1_X / 2, B=0)
+            k3_X = self._rhs_X_dt(self.X + k2_X / 2, B=0)
+            k4_X = self._rhs_X_dt(self.X + k3_X, B=0)
+
+            B = self.parameterization(self.X) if B is None else B
+            self.X += 1 / 6 * (k1_X + 2 * k2_X + 2 * k3_X + k4_X)
+            if add_B: self.X += B * self.dt
 
         self.step_count += 1
         if self.step_count % self.save_steps == 0:
