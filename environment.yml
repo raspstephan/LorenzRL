@@ -1,6 +1,7 @@
 name: example-environment
 channels:
   - conda-forge
+  - pytorch
 dependencies:
   - python
   - numpy
@@ -8,7 +9,7 @@ dependencies:
   - tqdm
   - xarray
   - scikit-learn
-  - torch
+  - pytorch
   - netcdf4
   - pip
   - pip:
