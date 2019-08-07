@@ -3,4 +3,4 @@ matplotlib
 tqdm
 xarray
 scikit-learn
-pytorch
+torch
