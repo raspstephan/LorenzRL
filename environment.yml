@@ -1,0 +1,15 @@
+name: example-environment
+channels:
+  - conda-forge
+dependencies:
+  - python
+  - numpy
+  - matplotlib
+  - tqdm
+  - xarray
+  - scikit-learn
+  - torch
+  - netcdf4
+  - pip
+  - pip:
+    - gym
